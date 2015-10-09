@@ -29,6 +29,18 @@
 #define SPEED_INC						0
 #define SPEED_DEC						1
 
+/* STEP_time = (INTCTXX[15:0]*192)/27M
+** 0.5cycle/s,200step/s,STEP_time = 5ms   --> INTCTXX[15:0] = 0x02BF
+** 1cycle/s,  400step/s,STEP_time = 2.5ms --> INTCTXX[15:0] = 0x015F
+** 1.5cycle/s,600step/s,STEP_time = 1.7ms --> INTCTXX[15:0] = 0x00EF(目标速度，大圈 1圈/2s，减速比16:50)
+** 2cycle/s,  800step/s,STEP_time = 1.25ms--> INTCTXX[15:0] = 0x00AF
+** 3cycle/s, 1200step/s,STEP_time = 0.8ms --> INTCTXX[15:0] = 0x0070
+ */
+#define SPEED_EXPECT				0x00EF//1bigCycle/2s
+#define SPEED_STOP				  0x6FFF//大于0x5000即可
+#define SPEED_MAX_VALUE			0x0070//0x00AF//0x02BF//(unsigned short)(0x0070)
+#define SPEED_MIN_VALUE			0x4AB5
+
 u8 Flag_AB1 = 0;
 u8 Flag_AB2 = 0;
 u8 PSUMAB_num = 0xff;
@@ -47,6 +59,7 @@ unsigned int INCTAB_num;
 unsigned int INCTCD_num;
 
 unsigned short dir = DIR_FORWARD;
+unsigned short val_bttnC = SPEED_EXPECT;
 
 u8 led_1,led_2=0;
 /**
@@ -63,7 +76,7 @@ void Delay(int b)
 /*
  * 说明：上电后减速，按A按钮后加速，再次按A按钮减速，依次交替...
 				 摁C按钮回复默认默认值，但不改变加速减速状态;
-				 摁B键固定在某一速度。
+				 摁B键固定在某一速度，且改变运动方向。
  */
 int main(void)
 {
@@ -76,8 +89,7 @@ int main(void)
 	digitalHi(GPIOC,GPIO_Pin_13);
 	digitalHi(GPIOC,GPIO_Pin_14);
 	digitalHi(GPIOC,GPIO_Pin_15);
-	
-//  printf("\r\n ************MS41908@9Demo**************\r\n");		
+		
 	MS_Rest();//41908复位
 	MS_Int1();
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2 , ENABLE);
@@ -94,12 +106,10 @@ int main(void)
 	 * 加,减速可以放在中断处理
 	 */
 	
-	INCTCD_num = 0x0140;
+	INCTCD_num = SPEED_MAX_VALUE;
 	PSUMCD_num = 19125/INCTCD_num;  //INCTAB_num * PSUMAB_num;			  //17ms PSUMCD_num的值由 INCTCD_num决定
 
-//	INCTAB_num = 0x4AB5;
-//	INCTAB_num = 0x0140;
-	INCTAB_num = 0x0140;
+	INCTAB_num = SPEED_MAX_VALUE;
   PSUMAB_num = 19125/INCTAB_num;  //INCTAB_num * PSUMAB_num;			  //17ms	PSUMCD_num的值由 INCTCD_num决定
 	
 	if(dir==DIR_FORWARD)
@@ -132,9 +142,9 @@ void TIM2_IRQHandler(void)
 		{
 			// A 电机加速控制
 			INCTAB_num = INCTAB_num - 2;   //加速,只需要把改值按照速度曲线变化就可以改变速度，现在演示的是线性的速度变化
-			if(INCTAB_num<0x0140)//320
+			if(INCTAB_num<SPEED_MAX_VALUE)
 			{
-				INCTAB_num = 0x0140;
+				INCTAB_num = SPEED_MAX_VALUE;
 			}
 			PSUMAB_num = 19125/INCTAB_num;
 			
@@ -150,22 +160,22 @@ void TIM2_IRQHandler(void)
 
 			// B 电机减速控制
 			INCTCD_num = INCTCD_num + 2;
-			if(INCTCD_num>0x4AB5)//19125
+			if(INCTCD_num>SPEED_MIN_VALUE)//19125
 			{
-				INCTCD_num = 0x4AB5;
+				INCTCD_num = SPEED_MIN_VALUE;
 			}
 			PSUMCD_num = 19125/INCTCD_num;
 
 			Spi_Write(0x29,0x0d00 | PSUMCD_num);	 //0x0dff    
 			Spi_Write(0x2a,INCTCD_num); 
 		}
-		else if(flag1==SPEED_DEC)    // 
+		else if(flag1==SPEED_DEC)
 		{
 			// A 电机减速控制
 			INCTAB_num = INCTAB_num + 2;   
-			if(INCTAB_num > 0x4AB5)
+			if(INCTAB_num > SPEED_MIN_VALUE)
 			{
-				INCTAB_num = 0x4AB5;
+				INCTAB_num = SPEED_MIN_VALUE;
 			}
 			PSUMAB_num = 19125/INCTAB_num;
 			
@@ -181,9 +191,9 @@ void TIM2_IRQHandler(void)
 
 			//B 电机加速控制
 			INCTCD_num  = INCTCD_num - 2;
-			if(INCTCD_num < 0x0140) 
+			if(INCTCD_num < SPEED_MAX_VALUE) 
 			{
-				INCTCD_num = 0x0140;
+				INCTCD_num = SPEED_MAX_VALUE;
 			}
 			PSUMCD_num = 19125/INCTCD_num;
 
@@ -206,95 +216,6 @@ void TIM2_IRQHandler(void)
 		TIM_ClearITPendingBit(TIM2 , TIM_FLAG_Update);  		 
 	}		 	
 }
-//void TIM2_IRQHandler(void)
-//{
-//	if ( TIM_GetITStatus(TIM2 , TIM_IT_Update) != RESET ) 
-//	{	
-//		VD_Low();           //上升沿更新寄存器值
-//		
-//		if(flag1==0)  // 
-//		{
-//			// A 电机加速控制
-//		   INCTAB_num = INCTAB_num - 50;   //加速  只需要把改值按照 速度曲线变化就可以改变速度，现在演示的是线性的速度变化
-//		   if(INCTAB_num<345)
-//			 {
-//			//	  flag1 = 1;
-//					INCTAB_num = 205;
-//			 }
-//		   PSUMAB_num = 19125/INCTAB_num;
-//		   Spi_Write(0x24,0x0d00 | PSUMAB_num);	 //0x0dff    
-//		   Spi_Write(0x25,INCTAB_num); 
-//			 
-//			 // B 电机减速控制
-//				 INCTCD_num = INCTCD_num+ 30;
-//				 if(INCTCD_num>19125)
-//				 {
-//					 INCTCD_num = 19125;
-//				 }
-//				 PSUMCD_num = 19125/INCTCD_num;
-//				 
-//				 Spi_Write(0x29,0x0d00 | PSUMCD_num);	 //0x0dff    
-//				 Spi_Write(0x2a,INCTCD_num); 
-//			 
-//			
-//			VD_Hihg();
-//				 
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//				 
-//			VD_Low(); 
-//		}
-
-//		if(flag1==1)    // 
-//		{
-//			// A 电机减速控制
-//		   INCTAB_num = INCTAB_num + 30;    //减速
-//		   if(INCTAB_num > 0x4AB5)
-//			 {
-//			//	 flag1 = 0;
-//				 INCTAB_num = 0x4AB5;
-//			 }
-//		   PSUMAB_num = 19125/INCTAB_num;
-//		   Spi_Write(0x24,0x0d00 | PSUMAB_num);	 //0x0dff    
-//		   Spi_Write(0x25,INCTAB_num); 
-//			 
-//			 //B 电机加速控制
-//				 INCTCD_num  = INCTCD_num - 50;
-//				 if(INCTCD_num < 0x0140) 
-//				 {
-//					 INCTCD_num = 0x0140;
-//				 }
-//				 PSUMCD_num = 19125/INCTCD_num;
-//				 
-//				 Spi_Write(0x29,0x0d00 | PSUMCD_num);	 //0x0dff    
-//				 Spi_Write(0x2a,INCTCD_num); 
-//			
-//			//VD_Low();           //上升沿更新寄存器值
-
-//			VD_Hihg();
-//				 
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//			__nop();__nop();__nop();__nop();
-//				 
-//			VD_Low(); 
-//		}
-//		
-
-//		
-//		TIM_ClearITPendingBit(TIM2 , TIM_FLAG_Update);  		 
-//	}		 	
-//}
-
 
 EXTI_InitTypeDef EXTI_InitStructure;
 void EXTI15_10_IRQHandler(void)   //  复位中断
@@ -345,13 +266,13 @@ void EXTI15_10_IRQHandler(void)   //  复位中断
 			MS_Int1();
 
 
-			INCTCD_num = 0x0120;
-			PSUMCD_num = 19125/INCTCD_num;  //INCTAB_num * PSUMAB_num;			  //5ms
+			INCTCD_num = SPEED_MAX_VALUE;
+			PSUMCD_num = 19125/INCTCD_num;  //INCTAB_num * PSUMAB_num;
 
-			//			INCTAB_num = 0x4AB5;
-			INCTAB_num = 0x0120;
-			PSUMAB_num = 19125/INCTAB_num;  //INCTAB_num * PSUMAB_num;			  //5ms	
-			//printf("\r\n ************MS_41908@9复位初始化***********\r\n");	
+			/* 当摁下C键时要么停止要么按照1大圈/2s的速度转动 */
+			val_bttnC = (val_bttnC==SPEED_EXPECT)?SPEED_STOP:SPEED_EXPECT;
+			INCTAB_num = val_bttnC;
+			PSUMAB_num = 19125/INCTAB_num;  //INCTAB_num * PSUMAB_num;
 			
 			if(dir==DIR_FORWARD)
 			{
