@@ -23,6 +23,9 @@
 
 #define	digitalHi(p,i)			{p->BSRR=i;}			//设置为高电平		
 
+#define DIR_FORWARD					(unsigned short)(0x0000)
+#define DIR_REVERSE					(unsigned short)(0x0100)
+
 #define SPEED_INC						0
 #define SPEED_DEC						1
 
@@ -42,6 +45,8 @@ unsigned int Speed_AB = 0x248d;
 unsigned int INCTAB_num;
 
 unsigned int INCTCD_num;
+
+unsigned short dir = DIR_FORWARD;
 
 u8 led_1,led_2=0;
 /**
@@ -72,26 +77,22 @@ int main(void)
 	digitalHi(GPIOC,GPIO_Pin_14);
 	digitalHi(GPIOC,GPIO_Pin_15);
 	
-//	printf("\r\n ***************************************\r\n");	
-//	printf("\r\n **********杭州瑞盟科技有限公司*********\r\n");	
-//  printf("\r\n ************MS41908@9Demo**************\r\n");	
-//	printf("\r\n 用于网络摄像机.监控摄像机用机头驱动芯片\r\n");	
+//  printf("\r\n ************MS41908@9Demo**************\r\n");		
 	MS_Rest();//41908复位
 	MS_Int1();
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2 , ENABLE);
 
-	 
-	//——————————————————————————————说明----------------------------------//
-	// VD_time  = INTCTXX[15:0] X SUMXX[7:0] X 24 / 27M   (单位：秒)  
-	//那么VD_FZ两个上升沿之间的时间间隔至少为 VD_FZ = VD_time + DT1 + DT2;
-	// 一般DT2时间设置为0， 所以  VD_FZ = VD_time + DT1;
-	// 比如 VD_time = 0.017 秒,那么代入上式可得 INTCTXX[15:0] X SUMXX[7:0] = 19125
-	//只要在调速期间 INTCTXX[15:0] X SUMXX[7:0] 的积保持不变，那么 VD_FZ的频率也不用变
-	// INTCTXX[15:0] 的值是决定转速的，值越大，转速越慢，反之则越快
-	//所以如果要对加减速进行曲线的拟合，那么只需要对 INCTXX_num的变量代入表达式
-	// 加 减速可以放在中断处理
-  // 以下就是步进电机加减速调速的例子
-	//----------------------------说明结束--------------------------------//
+	/*
+	 * VD_time  = INTCTXX[15:0] X SUMXX[7:0] X 24 / 27M   (单位：秒)  
+	 * 那么VD_FZ两个上升沿之间的时间间隔至少为 VD_FZ = VD_time + DT1 + DT2;
+	 * 一般DT2时间设置为0， 所以  VD_FZ = VD_time + DT1;
+	 * 比如设定 Freq(VD_time) = 60 HZ 即 VD_time = 0.017 秒,
+	 * 那么代入上式可得 INTCTXX[15:0] X SUMXX[7:0] = 19125 (0x4AB5)
+	 * 只要在调速期间 INTCTXX[15:0] X SUMXX[7:0] 的积保持不变，那么 VD_FZ的频率也不用变
+	 * INTCTXX[15:0] 的值是决定转速的，值越大，转速越慢，反之则越快
+	 * 所以如果要对加减速进行曲线的拟合，那么只需要对 INCTXX_num的变量代入表达式
+	 * 加,减速可以放在中断处理
+	 */
 	
 	INCTCD_num = 0x0140;
 	PSUMCD_num = 19125/INCTCD_num;  //INCTAB_num * PSUMAB_num;			  //17ms PSUMCD_num的值由 INCTCD_num决定
@@ -101,11 +102,18 @@ int main(void)
 	INCTAB_num = 0x0140;
   PSUMAB_num = 19125/INCTAB_num;  //INCTAB_num * PSUMAB_num;			  //17ms	PSUMCD_num的值由 INCTCD_num决定
 	
- Spi_Write(0x24,0x0d00 | PSUMAB_num);	 //0x0dff    
- Spi_Write(0x25,INCTAB_num); 
-			 
- Spi_Write(0x29,0x0d00 | PSUMCD_num);	 //0x0dff    
- Spi_Write(0x2a,INCTCD_num); 
+	if(dir==DIR_FORWARD)
+	{
+		Spi_Write(0x24,0x0c00 | PSUMAB_num);
+	}
+	else //if(dir==DIR_REVERSE)
+	{
+		Spi_Write(0x24,0x0d00 | PSUMAB_num);
+	}	 //0x0dff    
+	Spi_Write(0x25,INCTAB_num); 
+		 
+	Spi_Write(0x29,0x0d00 | PSUMCD_num);	 //0x0dff    
+	Spi_Write(0x2a,INCTCD_num); 
 
 	while(1)
 	{	
@@ -114,7 +122,7 @@ int main(void)
 }
 
 
-//定时器中断 -  per 17ms -- VD_TIME = 60HZ
+//定时器中断 -  per 17ms -- Freq(VD_TIME) = 60HZ
 //在定时器中断中处理加减速控制
 void TIM2_IRQHandler(void)
 {
@@ -129,7 +137,15 @@ void TIM2_IRQHandler(void)
 				INCTAB_num = 0x0140;
 			}
 			PSUMAB_num = 19125/INCTAB_num;
-			Spi_Write(0x24,0x0d00 | PSUMAB_num);	 //0x0dff    
+			
+			if(dir==DIR_FORWARD)
+			{
+				Spi_Write(0x24,0x0c00 | PSUMAB_num);
+			}
+			else //if(dir==DIR_REVERSE)
+			{
+				Spi_Write(0x24,0x0d00 | PSUMAB_num);
+			}	 //0x0dff     
 			Spi_Write(0x25,INCTAB_num); 
 
 			// B 电机减速控制
@@ -152,7 +168,15 @@ void TIM2_IRQHandler(void)
 				INCTAB_num = 0x4AB5;
 			}
 			PSUMAB_num = 19125/INCTAB_num;
-			Spi_Write(0x24,0x0d00 | PSUMAB_num);	 //0x0dff    
+			
+			if(dir==DIR_FORWARD)
+			{
+				Spi_Write(0x24,0x0c00 | PSUMAB_num);
+			}
+			else //if(dir==DIR_REVERSE)
+			{
+				Spi_Write(0x24,0x0d00 | PSUMAB_num);
+			}	 //0x0dff   
 			Spi_Write(0x25,INCTAB_num); 
 
 			//B 电机加速控制
@@ -275,7 +299,6 @@ void TIM2_IRQHandler(void)
 EXTI_InitTypeDef EXTI_InitStructure;
 void EXTI15_10_IRQHandler(void)   //  复位中断
 {
-
 	if(EXTI_GetITStatus(EXTI_Line13) != RESET) //确保是否产生了EXTI Line中断
 	{	
 		Delay(60);
@@ -296,6 +319,17 @@ void EXTI15_10_IRQHandler(void)   //  复位中断
 		if(GPIO_ReadInputDataBit(GPIOC,GPIO_Pin_14)==0)
 		{
 			flag1 = 2; //0-->1,1-->0
+			
+			/* change direction */
+			dir = (dir==DIR_FORWARD)?DIR_REVERSE:DIR_FORWARD;
+			if(dir==DIR_FORWARD)
+			{
+				Spi_Write(0x24,0x0c00 | PSUMAB_num);
+			}
+			else //if(dir==DIR_REVERSE)
+			{
+				Spi_Write(0x24,0x0d00 | PSUMAB_num);
+			}
 		}
 		
 		EXTI_ClearITPendingBit(EXTI_Line14);
@@ -306,19 +340,29 @@ void EXTI15_10_IRQHandler(void)   //  复位中断
 		Delay(60);
 		Delay(60);
 		if(GPIO_ReadInputDataBit(GPIOC,GPIO_Pin_15)==0)
-		 {
-			 MS_Rest();
-			 MS_Int1();
-			 
-			
+		{
+			MS_Rest();
+			MS_Int1();
+
+
 			INCTCD_num = 0x0120;
 			PSUMCD_num = 19125/INCTCD_num;  //INCTAB_num * PSUMAB_num;			  //5ms
 
-//			INCTAB_num = 0x4AB5;
+			//			INCTAB_num = 0x4AB5;
 			INCTAB_num = 0x0120;
 			PSUMAB_num = 19125/INCTAB_num;  //INCTAB_num * PSUMAB_num;			  //5ms	
 			//printf("\r\n ************MS_41908@9复位初始化***********\r\n");	
-		 }
+			
+			if(dir==DIR_FORWARD)
+			{
+				Spi_Write(0x24,0x0c00 | PSUMAB_num);
+			}
+			else //if(dir==DIR_REVERSE)
+			{
+				Spi_Write(0x24,0x0d00 | PSUMAB_num);
+			}	 //0x0dff   
+			Spi_Write(0x25,INCTAB_num); 
+		}
 		EXTI_ClearITPendingBit(EXTI_Line15);
 	}  
 /***********************************************************************************/
