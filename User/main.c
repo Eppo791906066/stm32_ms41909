@@ -29,16 +29,19 @@
 #define SPEED_INC						0
 #define SPEED_DEC						1
 
+#define TRUE								1
+#define FALSE								0
+
 /* STEP_time = (INTCTXX[15:0]*192)/27M
 ** 0.5cycle/s,200step/s,STEP_time = 5ms   --> INTCTXX[15:0] = 0x02BF
 ** 1cycle/s,  400step/s,STEP_time = 2.5ms --> INTCTXX[15:0] = 0x015F
 ** 1.5cycle/s,600step/s,STEP_time = 1.7ms --> INTCTXX[15:0] = 0x00EF(目标速度，大圈 1圈/2s，减速比16:50)
-** 2cycle/s,  800step/s,STEP_time = 1.25ms--> INTCTXX[15:0] = 0x00AF
-** 3cycle/s, 1200step/s,STEP_time = 0.8ms --> INTCTXX[15:0] = 0x0070
+** 2cycle/s,  800step/s,STEP_time = 1.25ms--> INTCTXX[15:0] = 0x00AF//该速度下共振严重
+** 3cycle/s, 1200step/s,STEP_time = 0.8ms --> INTCTXX[15:0] = 0x0070//该速度下已带不动传送带
  */
 #define SPEED_EXPECT				0x00EF//1bigCycle/2s
 #define SPEED_STOP				  0x6FFF//大于0x5000即可
-#define SPEED_MAX_VALUE			0x0070//0x00AF//0x02BF//(unsigned short)(0x0070)
+#define SPEED_MAX_VALUE			0x00EF//0x00AF//0x02BF//(unsigned short)(0x0070)
 #define SPEED_MIN_VALUE			0x4AB5
 
 u8 Flag_AB1 = 0;
@@ -46,11 +49,7 @@ u8 Flag_AB2 = 0;
 u8 PSUMAB_num = 0xff;
 u8 PSUMCD_num = 0xff;
 
-u8 flag1 = SPEED_INC;
-
-u8 flag2 = 0;
-
-u8 flag3 = 0;
+u8 flag_spd_change = SPEED_INC;
 
 unsigned int Speed_AB = 0x248d;
 
@@ -60,6 +59,8 @@ unsigned int INCTCD_num;
 
 unsigned short dir = DIR_FORWARD;
 unsigned short val_bttnC = SPEED_EXPECT;
+
+volatile unsigned char flag_reverse = FALSE;
 
 u8 led_1,led_2=0;
 /**
@@ -81,6 +82,10 @@ void Delay(int b)
 int main(void)
 {
 	SystemInit();
+	
+	//1ms systick
+	SysTick_Config(SystemCoreClock / 1000);
+	
 	USART1_Config();
   SPI_SPI2_Config();
 	MS_Config();
@@ -127,7 +132,20 @@ int main(void)
 
 	while(1)
 	{	
-    ;
+    if(flag_reverse == TRUE)
+		{
+			flag_reverse = FALSE;
+			/* change direction */
+			dir = (dir==DIR_FORWARD)?DIR_REVERSE:DIR_FORWARD;
+			if(dir==DIR_FORWARD)
+			{
+				Spi_Write(0x24,0x0400 | PSUMAB_num);//&0xf7ff - ledB off
+			}
+			else //if(dir==DIR_REVERSE)
+			{
+				Spi_Write(0x24,0x0d00 | PSUMAB_num);
+			}
+		}
   }
 }
 
@@ -138,7 +156,7 @@ void TIM2_IRQHandler(void)
 {
 	if ( TIM_GetITStatus(TIM2 , TIM_IT_Update) != RESET ) 
 	{	
-		if(flag1==SPEED_INC) 
+		if(flag_spd_change==SPEED_INC) 
 		{
 			// A 电机加速控制
 			INCTAB_num = INCTAB_num - 2;   //加速,只需要把改值按照速度曲线变化就可以改变速度，现在演示的是线性的速度变化
@@ -150,7 +168,7 @@ void TIM2_IRQHandler(void)
 			
 			if(dir==DIR_FORWARD)
 			{
-				Spi_Write(0x24,0x0c00 | PSUMAB_num);
+				Spi_Write(0x24,0x0400 | PSUMAB_num);//&0xf7ff - ledB off
 			}
 			else //if(dir==DIR_REVERSE)
 			{
@@ -169,7 +187,7 @@ void TIM2_IRQHandler(void)
 			Spi_Write(0x29,0x0d00 | PSUMCD_num);	 //0x0dff    
 			Spi_Write(0x2a,INCTCD_num); 
 		}
-		else if(flag1==SPEED_DEC)
+		else if(flag_spd_change==SPEED_DEC)
 		{
 			// A 电机减速控制
 			INCTAB_num = INCTAB_num + 2;   
@@ -181,7 +199,7 @@ void TIM2_IRQHandler(void)
 			
 			if(dir==DIR_FORWARD)
 			{
-				Spi_Write(0x24,0x0c00 | PSUMAB_num);
+				Spi_Write(0x24,0x0400 | PSUMAB_num);//&0xf7ff - ledB off
 			}
 			else //if(dir==DIR_REVERSE)
 			{
@@ -226,8 +244,7 @@ void EXTI15_10_IRQHandler(void)   //  复位中断
 		Delay(60);
 		if(GPIO_ReadInputDataBit(GPIOC,GPIO_Pin_13)==0)
 		{
-			//flag1 = !flag1;
-			flag1 = (flag1+1)%2; //0-->1,1-->0
+			flag_spd_change = (flag_spd_change+1)%2; //0-->1,1-->0
 		}
 		
 		EXTI_ClearITPendingBit(EXTI_Line13);
@@ -239,7 +256,7 @@ void EXTI15_10_IRQHandler(void)   //  复位中断
 		Delay(60);
 		if(GPIO_ReadInputDataBit(GPIOC,GPIO_Pin_14)==0)
 		{
-			flag1 = 2; //0-->1,1-->0
+			flag_spd_change = 2; //maintain current speed
 			
 			/* change direction */
 			dir = (dir==DIR_FORWARD)?DIR_REVERSE:DIR_FORWARD;
@@ -265,18 +282,18 @@ void EXTI15_10_IRQHandler(void)   //  复位中断
 			MS_Rest();
 			MS_Int1();
 
-
 			INCTCD_num = SPEED_MAX_VALUE;
 			PSUMCD_num = 19125/INCTCD_num;  //INCTAB_num * PSUMAB_num;
 
 			/* 当摁下C键时要么停止要么按照1大圈/2s的速度转动 */
+			flag_spd_change = 2; //maintain current speed
 			val_bttnC = (val_bttnC==SPEED_EXPECT)?SPEED_STOP:SPEED_EXPECT;
 			INCTAB_num = val_bttnC;
 			PSUMAB_num = 19125/INCTAB_num;  //INCTAB_num * PSUMAB_num;
 			
 			if(dir==DIR_FORWARD)
 			{
-				Spi_Write(0x24,0x0c00 | PSUMAB_num);
+				Spi_Write(0x24,0x0400 | PSUMAB_num);//&0xf7ff - ledB off
 			}
 			else //if(dir==DIR_REVERSE)
 			{

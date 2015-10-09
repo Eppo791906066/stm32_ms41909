@@ -296,8 +296,18 @@ void PendSV_Handler(void)
   * @param  None
   * @retval None
   */
+#define TRUE								1
+#define FALSE								0
+extern volatile unsigned char flag_reverse;
 void SysTick_Handler(void)
 {
+	static unsigned long cnt;
+	
+	if(++cnt==1200)
+	{
+		flag_reverse = TRUE;
+		cnt = 0;
+	}
 }
 
 /******************************************************************************/
